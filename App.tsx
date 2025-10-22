@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import ForceGraph from './components/ForceGraph';
 import EraFilter from './components/EraFilter';
 import AddNodeModal from './components/AddNodeModal';
@@ -6,8 +6,6 @@ import AIExpansionModal from './components/AIExpansionModal';
 import NodeInspector from './components/NodeInspector';
 import { creativityData, categoryColors } from './data/creativityOntology';
 import { NodeType, CreativeNode, GraphData, Category, SuggestedNode, CreativeLink } from './types';
-import { GoogleGenAI, Type } from "@google/genai";
-
 
 // Define eras in chronological order
 const eras = [
@@ -31,7 +29,40 @@ const App: React.FC = () => {
   const [isExpansionModalOpen, setIsExpansionModalOpen] = useState(false);
   const [suggestedExpansions, setSuggestedExpansions] = useState<SuggestedNode[]>([]);
   const [isSuggestingExpansions, setIsSuggestingExpansions] = useState(false);
+  const [copyButtonText, setCopyButtonText] = useState('Share Current View');
 
+  useEffect(() => {
+    // On initial load, parse URL parameters to set the state
+    const params = new URLSearchParams(window.location.search);
+    
+    const eraStart = params.get('era_start');
+    const eraEnd = params.get('era_end');
+    if (eraStart !== null && eraEnd !== null) {
+      const start = parseInt(eraStart, 10);
+      const end = parseInt(eraEnd, 10);
+      if (!isNaN(start) && !isNaN(end) && start >= 0 && end < eras.length && start <= end) {
+        setSelectedEraRange([start, end]);
+      }
+    }
+
+    const categoriesParam = params.get('categories');
+    if (categoriesParam) {
+      const urlCategories = new Set(categoriesParam.split(',') as Category[]);
+      const validCategories = Object.values(Category);
+      const filteredCategories = new Set([...urlCategories].filter(cat => validCategories.includes(cat)));
+      if (filteredCategories.size > 0) {
+        setActiveCategories(filteredCategories);
+      }
+    }
+
+    const selectedNodeId = params.get('selected_node');
+    if (selectedNodeId) {
+      const nodeToSelect = creativityData.nodes.find(n => n.id === selectedNodeId);
+      if (nodeToSelect) {
+        setSelectedNode(nodeToSelect);
+      }
+    }
+  }, []); // Empty dependency array ensures this runs only once on mount
 
   const filteredData = useMemo(() => {
     const [startIndex, endIndex] = selectedEraRange;
@@ -82,46 +113,19 @@ const App: React.FC = () => {
   
   const handleFillNodeDetails = async (nodeInfo: {id: string, description: string}): Promise<Partial<CreativeNode>> => {
       try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const prompt = `You are an expert in art history and the ontology of creative disciplines.
-        A user is adding a new concept to an ontology graph. Based on the provided name and/or description, please fill in the details for this concept.
-        
-        Provided Info:
-        - Name: ${nodeInfo.id}
-        - Description: ${nodeInfo.description}
-        
-        Your task is to return a JSON object with the following fields completed: 'type', 'category', 'era', and a refined, well-written 'description'.
-        
-        Constraints for the fields:
-        - 'type' must be one of: ${Object.values(NodeType).join(', ')}.
-        - 'category' must be one of: ${Object.values(Category).join(', ')}.
-        - 'era' must be one of: ${eras.join(', ')}.
-        - 'description' should be a concise, encyclopedic definition of the concept. If a description was provided, refine and expand upon it.
-        
-        Return only the JSON object.
-        `;
-        
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        type: { type: Type.STRING, enum: Object.values(NodeType) },
-                        category: { type: Type.STRING, enum: Object.values(Category) },
-                        era: { type: Type.STRING, enum: eras },
-                        description: { type: Type.STRING }
-                    },
-                    required: ['type', 'category', 'era', 'description']
-                }
-            }
+        const response = await fetch('/api/gemini', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                task: 'fillDetails',
+                payload: { nodeInfo }
+            }),
         });
-        
-        const result = JSON.parse(response.text.trim());
-        return result as Partial<CreativeNode>;
-
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'API request failed');
+        }
+        return await response.json();
       } catch (error) {
         console.error("AI fill details failed:", error);
         throw error;
@@ -130,48 +134,24 @@ const App: React.FC = () => {
 
   const handleSuggestConnections = async (newNode: Omit<CreativeNode, 'x'|'y'|'vx'|'vy'|'fx'|'fy'>): Promise<string[]> => {
       try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const allNodeIds = graphData.nodes.map(n => n.id);
-
-        const prompt = `You are an expert in art history and the ontology of creative disciplines.
-        Your task is to identify connections between creative concepts.
-        Given the following new creative concept:
-        - Name: ${newNode.id}
-        - Description: ${newNode.description}
-        - Category: ${newNode.category}
-        - Era: ${newNode.era}
-        - Type: ${newNode.type}
-
-        And the following list of existing concepts in the ontology:
-        [${allNodeIds.join(', ')}]
-
-        Identify the most relevant concepts from the existing list that are direct influences or parents of the new concept.
-        Return a JSON object with a single key "connections" which is an array of strings. Each string must be an exact ID from the existing concepts list.
-        Only suggest up to 5 of the most relevant connections.
-        `;
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                connections: {
-                  type: Type.ARRAY,
-                  description: "List of IDs of existing nodes that should be connected to the new node.",
-                  items: { type: Type.STRING }
-                }
-              }
-            }
-          }
+        const response = await fetch('/api/gemini', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                task: 'suggestConnections',
+                payload: { newNode, allNodeIds }
+            }),
         });
 
-        const jsonString = response.text.trim();
-        const result = JSON.parse(jsonString);
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'API request failed');
+        }
         
+        const result = await response.json();
         if (result.connections && Array.isArray(result.connections)) {
+          // Final validation on the client-side to ensure suggestions are valid
           const validConnections = result.connections.filter(id => allNodeIds.includes(id as string));
           return validConnections;
         }
@@ -189,50 +169,22 @@ const App: React.FC = () => {
     setSuggestedExpansions([]);
 
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const existingNodeIds = graphData.nodes.map(n => n.id);
-        
-        const prompt = `You are an expert in art history and the ontology of creative disciplines.
-        Based on the creative concept "${node.id}: ${node.description}", suggest up to 3 new, related concepts that are missing from the ontology.
-        Do NOT suggest any concepts that already exist in this list: [${existingNodeIds.join(', ')}].
-
-        For each new suggestion, provide a unique 'id', a brief 'description', a 'type', a 'category', and an 'era'.
-        - 'type' must be one of: ${Object.values(NodeType).join(', ')}.
-        - 'category' must be one of: ${Object.values(Category).join(', ')}.
-        - 'era' must be one of these: ${eras.join(', ')}.
-
-        Also provide a 'connections' array listing IDs from the existing list that the new node should link to. Always include a connection to the original node, "${node.id}".
-
-        Return a JSON object with a single key "suggestions", which is an array of these new node objects.`;
-        
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        suggestions: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    id: { type: Type.STRING },
-                                    description: { type: Type.STRING },
-                                    type: { type: Type.STRING, enum: Object.values(NodeType) },
-                                    category: { type: Type.STRING, enum: Object.values(Category) },
-                                    era: { type: Type.STRING, enum: eras },
-                                    connections: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        const response = await fetch('/api/gemini', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                task: 'startExpansion',
+                payload: { node, existingNodeIds }
+            }),
         });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'API request failed');
+        }
         
-        const result = JSON.parse(response.text.trim());
+        const result = await response.json();
         if (result.suggestions && Array.isArray(result.suggestions)) {
             const newSuggestions = result.suggestions.filter(
                 (s: SuggestedNode) => s && s.id && !existingNodeIds.some(id => id.toLowerCase() === s.id.toLowerCase())
@@ -277,6 +229,32 @@ const App: React.FC = () => {
     setIsExpansionModalOpen(false);
   };
 
+  const handleShare = () => {
+    const params = new URLSearchParams();
+    
+    params.set('era_start', selectedEraRange[0].toString());
+    params.set('era_end', selectedEraRange[1].toString());
+
+    if (activeCategories.size < Object.values(Category).length) {
+      params.set('categories', Array.from(activeCategories).join(','));
+    }
+
+    if (selectedNode) {
+      params.set('selected_node', selectedNode.id);
+    }
+
+    const url = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+
+    navigator.clipboard.writeText(url).then(() => {
+      setCopyButtonText('Copied!');
+      setTimeout(() => setCopyButtonText('Share Current View'), 2000);
+    }).catch(err => {
+      console.error('Failed to copy URL: ', err);
+      setCopyButtonText('Copy Failed');
+      setTimeout(() => setCopyButtonText('Share Current View'), 2000);
+    });
+  };
+
   return (
     <main className="bg-black text-white min-h-screen flex flex-col items-center p-4 font-sans relative">
       <div className="text-center my-4 z-10">
@@ -319,13 +297,22 @@ const App: React.FC = () => {
             </div>
           </div>
         )}
-        <div className="p-3 border-t border-gray-700">
+        <div className="p-3 border-t border-gray-700 space-y-2">
            <button 
               onClick={() => setIsAddModalOpen(true)}
               className="w-full p-2 text-sm bg-gray-800 hover:bg-gray-700 rounded transition-colors duration-200 flex items-center justify-center space-x-2 focus:outline-none focus:ring-1 focus:ring-white"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="http://www.w3.org/2000/svg" fill="currentColor"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" /></svg>
               <span>Add Concept Manually</span>
+            </button>
+            <button 
+              onClick={handleShare}
+              className="w-full p-2 text-sm bg-gray-800 hover:bg-gray-700 rounded transition-colors duration-200 flex items-center justify-center space-x-2 focus:outline-none focus:ring-1 focus:ring-white"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M15 8a3 3 0 10-2.977-2.63l-4.94 2.47a3 3 0 100 4.319l4.94 2.47a3 3 0 10.895-1.789l-4.94-2.47a3.027 3.027 0 000-.74l4.94-2.47C13.456 7.68 14.19 8 15 8z" />
+              </svg>
+              <span>{copyButtonText}</span>
             </button>
         </div>
       </div>

@@ -6,7 +6,7 @@
 
 This contains everything you need to run your app locally.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1ZmcF_gftS41xB3sHK2Vc2GaMYZz52FMF
+View your app in AI Studio: https://ai.studio/apps/drive/11kAt_-QD7o67IhIU6R1P1Hxy88rf3gv9
 
 ## Run Locally
 
@@ -18,4 +18,3 @@ View your app in AI Studio: https://ai.studio/apps/drive/1ZmcF_gftS41xB3sHK2Vc2G
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
-"# CreativeOntology" 

@@ -159,19 +159,30 @@ const ForceGraph: React.FC<ForceGraphProps> = ({ data, selectedNode, onNodeClick
     }
     
     const resizeObserver = new ResizeObserver(entries => {
-      for (let entry of entries) {
-        const { width, height } = entry.contentRect;
-        d3.select(svgRef.current).attr('width', width).attr('height', height)
-           .attr('viewBox', [-width / 2, -height / 2, width, height].join(' '));
-      }
+      window.requestAnimationFrame(() => {
+        if (!Array.isArray(entries) || !entries.length) {
+          return;
+        }
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          if (svgRef.current) {
+            d3.select(svgRef.current)
+              .attr('width', width)
+              .attr('height', height)
+              .attr('viewBox', [-width / 2, -height / 2, width, height].join(' '));
+          }
+        }
+      });
     });
 
     resizeObserver.observe(container);
 
     return () => {
       simulation.stop();
-      resizeObserver.unobserve(container);
-      d3.select(svgRef.current).on('click', null);
+      resizeObserver.disconnect();
+      if (svgRef.current) {
+        d3.select(svgRef.current).on('click', null);
+      }
     };
   }, [data, selectedNode, onNodeClick]);
 
