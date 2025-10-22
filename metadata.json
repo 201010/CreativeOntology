@@ -1,0 +1,5 @@
+{
+  "name": "Ontology of Human Creativity",
+  "description": "An interactive force-directed graph exploring the ontology of human creativity, showing how creative disciplines have emerged and influenced each other over time. Built with React, D3.js, and Tailwind CSS.",
+  "requestFramePermissions": []
+}
